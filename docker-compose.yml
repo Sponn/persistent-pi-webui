@@ -4,7 +4,8 @@ services:
     container_name: pi-agent
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      # Set PI_WEBUI_PORT in your environment or .env file to change the host port.
+      - "${PI_WEBUI_PORT:-3000}:3000"
     volumes:
       - pi-config:/home/pi/.config/pi
       - pi-workspace:/home/pi/workspace
