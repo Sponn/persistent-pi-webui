@@ -1,0 +1,17 @@
+services:
+  pi-agent:
+    build: .
+    container_name: pi-agent
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - pi-config:/home/pi/.config/pi
+      - pi-workspace:/home/pi/workspace
+    # Add provider env vars as needed, example:
+    # environment:
+    #   OPENAI_API_KEY: ${OPENAI_API_KEY}
+
+volumes:
+  pi-config:
+  pi-workspace:
