@@ -1,18 +1,104 @@
+# PI WEB + Pi coding agent, split into the two services used by the upstream
+# PI WEB Docker setup (https://github.com/jmfederico/pi-web/tree/main/docker):
+#   - sessiond: long-lived owner of Pi agent sessions
+#   - web:      HTTP/WebSocket UI + API, talks to sessiond over a shared socket
+#
+# Host port/bind address (use `sudo env VAR=value docker compose ...` with sudo):
+#   PI_WEBUI_PORT       host port, default 3000
+#   PI_WEBUI_BIND_ADDR  host address, default 127.0.0.1 (loopback only)
+
+x-pi-build: &pi-build
+  context: .
+  args:
+    # npm version/range of @jmfederico/pi-web to install.
+    PI_WEB_VERSION: ${PI_WEB_VERSION:-latest}
+
+x-pi-environment: &pi-environment
+  HOME: /data/home
+  XDG_CONFIG_HOME: /data/config
+  PI_WEB_DATA_DIR: /data/pi-web
+  PI_WEB_SESSIOND_SOCKET: /data/pi-web/sessiond.sock
+  PI_CODING_AGENT_DIR: /data/pi-agent
+  # Optional: pass provider API key variables that Pi reads, for example
+  # SOME_PROVIDER_API_KEY: ${SOME_PROVIDER_API_KEY:-}
+  # (or log in with Pi's /login instead; see README).
+
+x-pi-volumes: &pi-volumes
+  - pi-data:/data
+  - pi-workspace:/workspace
+
 services:
-  pi-agent:
-    build: .
-    container_name: pi-agent
-    restart: unless-stopped
-    ports:
-      # Set PI_WEBUI_PORT in your environment or .env file to change the host port.
-      - "${PI_WEBUI_PORT:-3000}:3000"
+  # One-shot: creates the data directories and gives /data and /workspace to
+  # the runtime user (UID/GID 1000). Also fixes volumes created by older
+  # versions of this repo, whose files were owned by a different UID.
+  volume-init:
+    build: *pi-build
+    image: persistent-pi-webui:local
+    user: "0:0"
+    restart: "no"
+    command:
+      - bash
+      - -euc
+      - |
+        mkdir -p /data/home /data/config /data/pi-web /data/pi-agent /workspace
+        for dir in /data /data/home /data/config /data/pi-web /data/pi-agent /workspace; do
+          if [ "$$(stat -c %u:%g "$$dir")" != "1000:1000" ]; then
+            echo "Fixing ownership of $$dir"
+            chown -R 1000:1000 "$$dir"
+          fi
+        done
     volumes:
-      - pi-config:/home/pi/.config/pi
-      - pi-workspace:/home/pi/workspace
-    # Add provider env vars as needed, example:
-    # environment:
-    #   OPENAI_API_KEY: ${OPENAI_API_KEY}
+      - pi-data:/data
+      - pi-workspace:/workspace
+      # Legacy volume from the previous (non-working) setup; kept attached
+      # read-only so it is never deleted. See README "Migrating".
+      - pi-config:/legacy/pi-config:ro
+
+  sessiond:
+    build: *pi-build
+    image: persistent-pi-webui:local
+    command: ["pi-web-sessiond"]
+    init: true
+    restart: unless-stopped
+    user: "1000:1000"
+    depends_on:
+      volume-init:
+        condition: service_completed_successfully
+    environment: *pi-environment
+    volumes: *pi-volumes
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /data/pi-web/sessiond.sock"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  web:
+    build: *pi-build
+    image: persistent-pi-webui:local
+    command: ["pi-web-server"]
+    init: true
+    restart: unless-stopped
+    user: "1000:1000"
+    depends_on:
+      sessiond:
+        condition: service_healthy
+    environment:
+      <<: *pi-environment
+      PI_WEB_HOST: 0.0.0.0
+      PI_WEB_PORT: "8504"
+    ports:
+      # Set PI_WEBUI_PORT / PI_WEBUI_BIND_ADDR in your environment or .env file.
+      - "${PI_WEBUI_BIND_ADDR:-127.0.0.1}:${PI_WEBUI_PORT:-3000}:8504"
+    volumes: *pi-volumes
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8504/api/pi-web/runtime >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
 
 volumes:
-  pi-config:
+  pi-data:
   pi-workspace:
+  pi-config:

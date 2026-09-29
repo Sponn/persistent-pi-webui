@@ -1,35 +1,66 @@
-FROM node:20-slim
+# PI WEB (https://github.com/jmfederico/pi-web) + Pi coding agent
+# (https://github.com/earendil-works/pi) in a persistent container.
+#
+# Both npm packages require Node.js >= 22.19, so this image is based on the
+# official Node 22 image (the build fails fast if the version is too old).
+ARG NODE_IMAGE=node:22-bookworm-slim
 
-# Install system deps that pi's tools commonly shell out to
-# (git for repo ops, python3/make/g++ for native npm builds, curl for healthchecks)
+FROM ${NODE_IMAGE}
+
+# @jmfederico/pi-web npm version/range. Pi Coding Agent is installed as its
+# npm peer dependency (newest compatible version), like the upstream image.
+ARG PI_WEB_VERSION=latest
+
+ENV NPM_CONFIG_UPDATE_NOTIFIER=false \
+    NPM_CONFIG_FUND=false \
+    NPM_CONFIG_AUDIT=false \
+    SHELL=/bin/bash \
+    TERM=xterm-256color
+
+# Tools the agent and PI WEB shell out to; python3/make/g++ allow native npm
+# modules (node-pty) to build when no prebuilt binary is available.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    curl \
-    python3 \
-    make \
-    g++ \
-    ca-certificates \
+      bash \
+      ca-certificates \
+      curl \
+      git \
+      g++ \
+      make \
+      openssh-client \
+      procps \
+      python3 \
+      ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
-# Install the pi coding agent CLI and its web UI globally
-RUN npm install -g @earendil-works/pi-coding-agent @earendil-works/pi-web-ui
+RUN set -eux; \
+    node -e 'const [a,b]=process.versions.node.split(".").map(Number); if (a<22||(a===22&&b<19)) { console.error("Node >= 22.19 required, found " + process.versions.node); process.exit(1); }'; \
+    npm install -g --omit=dev --include=peer "@jmfederico/pi-web@${PI_WEB_VERSION}"; \
+    global_root="$(npm root -g)"; \
+    global_prefix="$(npm prefix -g)"; \
+    peer_pi_bin="${global_root}/@jmfederico/pi-web/node_modules/.bin/pi"; \
+    if [ -x "${peer_pi_bin}" ]; then ln -sf "${peer_pi_bin}" "${global_prefix}/bin/pi"; fi; \
+    command -v pi-web-server; \
+    command -v pi-web-sessiond; \
+    command -v pi; \
+    npm cache clean --force
 
-# Create a dedicated non-root user and persistent config/workspace dirs
-RUN useradd -m -s /bin/bash pi \
-    && mkdir -p /home/pi/.config/pi /home/pi/workspace \
-    && chown -R pi:pi /home/pi
+# Persistent state lives under /data (see docker-compose.yml); project files
+# live under /workspace. Both are owned by the image's non-root `node` user
+# (UID/GID 1000).
+ENV HOME=/data/home \
+    XDG_CONFIG_HOME=/data/config \
+    PI_WEB_DATA_DIR=/data/pi-web \
+    PI_WEB_SESSIOND_SOCKET=/data/pi-web/sessiond.sock \
+    PI_CODING_AGENT_DIR=/data/pi-agent \
+    PI_WEB_HOST=0.0.0.0 \
+    PI_WEB_PORT=8504
 
-USER pi
-WORKDIR /home/pi/workspace
+RUN mkdir -p /data/home /data/config /data/pi-web /data/pi-agent /workspace \
+    && chown -R node:node /data /workspace
 
-# Default config/data location pi should persist to
-ENV PI_CONFIG_DIR=/home/pi/.config/pi
-ENV HOME=/home/pi
+USER node
+WORKDIR /workspace
 
-# Web UI port
-EXPOSE 3000
+EXPOSE 8504
 
-VOLUME ["/home/pi/.config/pi", "/home/pi/workspace"]
-
-# Launch the web UI
-CMD ["pi-web-ui", "--host", "0.0.0.0", "--port", "3000", "--config-dir", "/home/pi/.config/pi"]
+CMD ["pi-web-server"]
