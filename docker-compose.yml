@@ -5,7 +5,7 @@
 #
 # Host port/bind address (use `sudo env VAR=value docker compose ...` with sudo):
 #   PI_WEBUI_PORT       host port, default 3000
-#   PI_WEBUI_BIND_ADDR  host address, default 127.0.0.1 (loopback only)
+#   PI_WEBUI_BIND_ADDR  host address, default 0.0.0.0 (all interfaces)
 
 x-pi-build: &pi-build
   context: .
@@ -88,8 +88,8 @@ services:
       PI_WEB_HOST: 0.0.0.0
       PI_WEB_PORT: "8504"
     ports:
-      # Set PI_WEBUI_PORT / PI_WEBUI_BIND_ADDR in your environment or .env file.
-      - "${PI_WEBUI_BIND_ADDR:-127.0.0.1}:${PI_WEBUI_PORT:-3000}:8504"
+      # Bind the host port on 0.0.0.0 so it is reachable from outside the host.
+      - "0.0.0.0:${PI_WEBUI_PORT:-3000}:8504"
     volumes: *pi-volumes
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8504/api/pi-web/runtime >/dev/null"]
